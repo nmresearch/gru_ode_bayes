@@ -1,5 +1,5 @@
 import argparse
-import gru_ode_bayes.data_utils as data_utils
+import gru_ode_bayes.data_utils_bond as data_utils
 import gru_ode_bayes
 import torch
 import tqdm
@@ -28,13 +28,15 @@ if args.demo:
 model_name = args.model_name
 params_dict=dict()
 
-gpu_num = 2
-device  = torch.device(f"cuda:{gpu_num}")
-torch.cuda.set_device(gpu_num)
+device = "cpu"
+#gpu_num = 2
+#device  = torch.device(f"cuda:{gpu_num}")
+#torch.cuda.set_device(gpu_num)
 
 #Dataset metadata
-metadata = np.load(f"{args.dataset[:-4]}_metadata.npy",allow_pickle=True).item()
+#metadata = np.load(f"{args.dataset[:-4]}_metadata.npy",allow_pickle=True).item()
 
+metadata = {"delta_t": 0.05, "T": 10, "N": 10000, "theta": 1.0, "sigma": 0.1, "r_mu": [1.0, -1.0], "sample_rate": 2, "dual_sample_rate": 0.2, "rho": 0.99, "max_lag": 0, "r_std": 1/np.sqrt(12)}
 delta_t = metadata["delta_t"]
 T       = metadata["T"]
 
@@ -103,6 +105,7 @@ for epoch in range(epoch_max):
 
     with torch.no_grad():
         mse_val  = 0
+        mae_val = 0
         loss_val = 0
         num_obs  = 0
         model.eval()
@@ -126,16 +129,20 @@ for epoch in range(epoch_max):
 
             p_val     = data_utils.extract_from_path(t_vec,p_vec,times_val,times_idx)
             m, v      = torch.chunk(p_val,2,dim=1)
+            print ("X_val", X_val, "m", m, "v", v)
+            print (m[:30])
             last_loss = (data_utils.log_lik_gaussian(X_val,m,v)*M_val).sum()
             mse_loss  = (torch.pow(X_val - m, 2) * M_val).sum()
-
+            mae_loss =  (torch.abs(X_val - m) * M_val).sum() * 10
             loss_val += last_loss.cpu().numpy()
             mse_val  += mse_loss.cpu().numpy()
+            mae_val  += mae_loss.cpu().numpy()
             num_obs  += M_val.sum().cpu().numpy()
 
         loss_val /= num_obs
         mse_val  /= num_obs
-        print(f"Mean validation loss at epoch {epoch}: nll={loss_val:.5f}, mse={mse_val:.5f}  (num_obs={num_obs})")
+        mae_val /= num_obs
+        print(f"Mean validation loss at epoch {epoch}: nll={loss_val:.5f}, mse={mse_val:.5f}, mae={mae_val:.5f}, (num_obs={num_obs})")
 
 print(f"Last validation log likelihood : {loss_val}")
 print(f"Last validation MSE : {mse_val}")

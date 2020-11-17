@@ -175,6 +175,7 @@ class GRUObservationCellLogvar(torch.nn.Module):
     def forward(self, h, p, X_obs, M_obs, i_obs):
         ## only updating rows that have observations
         p_obs        = p[i_obs]
+        #print (i_obs, p_obs)
 
         mean, logvar = torch.chunk(p_obs, 2, dim=1)
         sigma        = torch.exp(0.5 * logvar)
@@ -183,6 +184,7 @@ class GRUObservationCellLogvar(torch.nn.Module):
         ## log normal loss, over all observations
         log_lik_c    = np.log(np.sqrt(2*np.pi))
         losses       = 0.5 * ((torch.pow(error, 2) + logvar + 2*log_lik_c) * M_obs)
+        #print (losses.sum())
         if losses.sum()!=losses.sum():
             import ipdb; ipdb.set_trace()
 
@@ -341,7 +343,7 @@ class NNFOwithBayesianJumps(torch.nn.Module):
 
         raise ValueError(f"Unknown solver '{self.solver}'.")
 
-    def forward(self, times, time_ptr, X, M, obs_idx, delta_t, T, cov,
+    def forward(self, times, time_ptr, X, M, obs_idx, size, delta_t, T, cov,
                 return_path=False, smoother = False, class_criterion = None, labels=None):
         """
         Args:
@@ -410,6 +412,7 @@ class NNFOwithBayesianJumps(torch.nn.Module):
             X_obs = X[start:end]
             M_obs = M[start:end]
             i_obs = obs_idx[start:end]
+            size_obs = size[start:end]
 
             ## Using GRUObservationCell to update h. Also updating p and loss
             h, losses = self.gru_obs(h, p, X_obs, M_obs, i_obs)
@@ -419,9 +422,12 @@ class NNFOwithBayesianJumps(torch.nn.Module):
                 num_evals_vec[i_obs] +=1
             if losses.sum()!=losses.sum():
                 import ipdb;ipdb.set_trace()
+            #loss_1    = loss_1+ (losses * size_obs).sum() * M_obs.sum()/size_obs.sum()
             loss_1    = loss_1+ losses.sum()
+            #print ("loss_1", loss_1)
             p         = self.p_model(h)
 
+            #loss_2 = loss_2 + compute_KL_loss(p_obs = p[i_obs], X_obs = X_obs, M_obs = M_obs, size=size_obs, logvar=self.logvar)
             loss_2 = loss_2 + compute_KL_loss(p_obs = p[i_obs], X_obs = X_obs, M_obs = M_obs, logvar=self.logvar)
 
             if return_path:
@@ -474,7 +480,7 @@ def compute_KL_loss(p_obs, X_obs, M_obs, obs_noise_std=1e-2, logvar=True):
         mean, var = torch.chunk(p_obs, 2, dim=1)
         ## making var non-negative and also non-zero (by adding a small value)
         std       = torch.pow(torch.abs(var) + 1e-5,0.5)
-
+    #return (gaussian_KL(mu_1 = mean, mu_2 = X_obs, sigma_1 = std, sigma_2 = obs_noise_std)*M_obs*size).sum()* M_obs.sum()/size.sum()
     return (gaussian_KL(mu_1 = mean, mu_2 = X_obs, sigma_1 = std, sigma_2 = obs_noise_std)*M_obs).sum()
 
 

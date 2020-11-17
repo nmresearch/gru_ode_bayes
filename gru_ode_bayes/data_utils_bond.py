@@ -91,8 +91,8 @@ class ODE_Dataset(Dataset):
 
         #Create Dummy covariates and labels if they are not fed.
         if self.cov_df is None:
-            #num_unique = np.zeros(self.df["ID"].nunique())
-            num_unique = np.ones(self.df["ID"].nunique()) * 100
+            num_unique = np.zeros(self.df["ID"].nunique())
+            #num_unique = np.ones(self.df["ID"].nunique()) * 100
             self.cov_df = pd.DataFrame({"ID":self.df["ID"].unique(),"Cov": num_unique})
         if self.label_df is None:
             num_unique = np.zeros(self.df["ID"].nunique())
@@ -109,6 +109,7 @@ class ODE_Dataset(Dataset):
                 df_afterIdx  = self.df.loc[self.df["Time"]>val_options["T_val"],"ID"].unique()
             
             valid_idx = np.intersect1d(df_beforeIdx,df_afterIdx)
+            #valid_idx = df_afterIdx
             self.df = self.df.loc[self.df["ID"].isin(valid_idx)]
             self.label_df = self.label_df.loc[self.label_df["ID"].isin(valid_idx)]
             self.cov_df   = self.cov_df.loc[self.cov_df["ID"].isin(valid_idx)]
@@ -130,7 +131,7 @@ class ODE_Dataset(Dataset):
         self.variable_num = sum([c.startswith("Value") for c in self.df.columns]) #number of variables in the dataset
         self.cov_dim = self.cov_df.shape[1]-1
 
-        self.cov_df = self.cov_df.astype(np.float32)
+        self.cov_df = self.cov_df.astype(np.float32) #Note
         self.cov_df.set_index("ID", inplace=True)
 
         self.label_df.set_index("ID",inplace=True)
@@ -146,15 +147,15 @@ class ODE_Dataset(Dataset):
             self.df.Mask_2  = self.df.Mask_2.astype(np.float32)
 
         else:
-            self.df = self.df.astype(np.float32)
+            self.df = self.df.astype(np.float32) #Note
 
         if self.validation:
             assert val_options is not None, "Validation set options should be fed"
-            self.df_before = self.df.loc[self.df["Time"]<=val_options["T_val"]].copy()
+            self.df_before = self.df.loc[self.df["Time"]<val_options["T_val"]].copy()
             if val_options.get("T_val_from"): #Validation samples only after some time.
                 self.df_after  = self.df.loc[self.df["Time"]>=val_options["T_val_from"]].sort_values("Time").copy()
             else:
-                self.df_after  = self.df.loc[self.df["Time"]>val_options["T_val"]].sort_values("Time").copy()
+                self.df_after  = self.df.loc[self.df["Time"]>=val_options["T_val"]].sort_values("Time").copy()
 
             if val_options.get("T_closest") is not None:
                 df_after_temp = self.df_after.copy()
@@ -168,16 +169,15 @@ class ODE_Dataset(Dataset):
             self.df = self.df_before #We remove observations after T_val
 
 
-            self.df_after.ID = self.df_after.ID.astype(np.int)
+            self.df_after.ID = self.df_after.ID.astype(np.int) #Note
             self.df_after.sort_values("Time", inplace=True)
         else:
             self.df_after = None
 
 
         self.length     = self.df["ID"].nunique()
-        self.df.ID      = self.df.ID.astype(np.int)
+        self.df.ID      = self.df.ID.astype(np.int) #Note
         self.df.set_index("ID", inplace=True)
-
         self.df.sort_values("Time", inplace=True)
 
     def __len__(self):
@@ -185,11 +185,14 @@ class ODE_Dataset(Dataset):
 
     def __getitem__(self, idx):
         subset = self.df.loc[idx]
+        #subset = self.df.loc[self.df.index == self.cusips[idx]]
         if len(subset.shape)==1: #Don't ask me anything about this.
             subset = self.df.loc[[idx]]
 
         covs = self.cov_df.loc[idx].values
         tag  = self.label_df.loc[idx].astype(np.float32).values
+        #covs = self.cov_df.loc[self.cov_df.index==self.cusips[idx]].values
+        #tag  = self.label_df.loc[self.label_df.index==self.cusips[idx]].astype(np.float32).values
         if self.validation :
             val_samples = self.df_after.loc[self.df_after["ID"]==idx]
         else:
@@ -235,6 +238,7 @@ def custom_collate_fn(batch):
     labels  = torch.tensor([b["y"] for b in batch])
 
     batch_ids     = idx2batch[df.index.values].values
+    #batch_ids     = idx2batch[df.index.values].values
 
     ## calculating number of events at every time
     times, counts = np.unique(df.Time.values, return_counts=True)
@@ -244,14 +248,17 @@ def custom_collate_fn(batch):
 
     value_cols = [c.startswith("Value") for c in df.columns]
     mask_cols  = [c.startswith("Mask") for c in df.columns]
+    size_cols = [c.startswith("LogSize") for c in df.columns]
 
     if batch[0]['val_samples'] is not None:
         df_after = pd.concat(b["val_samples"] for b in batch)
         df_after.sort_values(by=["ID","Time"], inplace=True)
         value_cols_val = [c.startswith("Value") for c in df_after.columns]
         mask_cols_val  = [c.startswith("Mask") for c in df_after.columns]
+        size_cols_val = [c.startswith("LogSize") for c in df_after.columns]
         X_val = torch.tensor(df_after.iloc[:,value_cols_val].values)
         M_val = torch.tensor(df_after.iloc[:,mask_cols_val].values)
+        size_val = torch.tensor(df_after.iloc[:,size_cols_val].values)
         times_val = df_after["Time"].values
         index_val = idx2batch[df_after["ID"].values].values
 
@@ -269,6 +276,7 @@ def custom_collate_fn(batch):
     else:
         X_val = None
         M_val = None
+        size_val = None
         times_val = None
         index_val = None
         tens_last = None
@@ -281,15 +289,18 @@ def custom_collate_fn(batch):
     res["time_ptr"] = time_ptr
     res["X"]        = torch.tensor(df.iloc[:, value_cols].values)
     res["M"]        = torch.tensor(df.iloc[:, mask_cols].values)
+    res["size"]     = torch.tensor(df.iloc[:, size_cols].values)
     res["obs_idx"]  = torch.tensor(batch_ids)
     res["y"]        = labels
     res["cov"]      = df_cov
     res["X_val"]    = X_val
     res["M_val"]    = M_val
+    res["size_val"] = size_val
     res["times_val"]= times_val
     res["index_val"]= index_val
     res["X_last"]   = tens_last
     res["obs_idx_last"]= index_last
+    res["df_val"]   = df_after if batch[0]['val_samples'] is not None else None
 
     return res
 
